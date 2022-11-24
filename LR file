@@ -12,6 +12,14 @@ function Get-SummaryFieldName
 		return $Mapping[$Field]
 	} else {
 		return "Unknown Field"
+		
+ServiceDesk API URL : servicedesk.iftas.in
+
+Tech Name(Usrename) : ngsocsupport
+Teck Key :8F7ADDC3-079D-4DD7-B46E-71D4DE5C7A3A
+p: Soc$upp0rt@321
+
+
 	}
 }
 
