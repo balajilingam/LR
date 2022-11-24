@@ -14,3 +14,23 @@ function Get-SummaryFieldName
 		return "Unknown Field"
 	}
 }
+
+function Get-UTCEpoch{
+
+
+	$NormalMessageDate= "2022-11-24T13:43:30"
+	$SourceTimeZone = [TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
+	$DestinationTimeZone = [TimeZoneInfo]::FindSystemTimeZoneById("UTC")
+	$ConvertedTime = [TimeZoneInfo]::ConvertTime($NormalMessageDate, $SourceTimeZone, $DestinationTimeZone).ToString('yyyy-MM-ddTHH:mm:ss')
+	$Con1 = [TimeZoneInfo]::ConvertTime($NormalMessageDate, $SourceTimeZone, $DestinationTimeZone);
+
+
+	$UTCEpoch = [int64](Get-Date -Date $Con1 -UFormat %s )
+	$ISTEpoch = [int64](Get-Date -Date $NormalMessageDate -UFormat %s )
+
+
+
+	$UC = $UTCEpoch*1000
+	$IC = $ISTEpoch*1000
+
+}
