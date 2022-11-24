@@ -132,7 +132,7 @@ function Send-MailNotification
 	param(
 		[string] [Parameter(Mandatory=$true)] $body
 	)
-	Send-MailMessage -From 'noreply-logrhythmnotifications@iftas.in' -To 'CyberSecurity.Team_g@iftas.in' -Subject 'Logrhythm Failure Notification' -Body $body -Priority High -DeliveryNotificationOption OnSuccess, OnFailure -SmtpServer '192.168.102.133'
+	
 	Write-SRPCLog -Level "Info" -Output -Message  "Sent Mail on Error Notification. $body"
 }
 
@@ -313,9 +313,9 @@ $Status = "Open"
 
 
 # Fetching Alarm Details 
-#https://10.160.4.4:8501/lr-drilldown-cache-api/drilldown/237958
-$DrilldownApiUrl = "https://172.38.1.20:8501/lr-drilldown-cache-api/"
-$gToken = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOi0xMDAsImp0aSI6IjliYjY0NTM1LWVjMzctNDhkYi05NTJhLWE0NDVlNTZmMTNhYiIsImNpZCI6IjcyNjkzRTI4LTc3M0MtNEYyMy1BRjExLTY4NDNBOTNFNUVCNSIsImlzcyI6ImxyLWF1dGgiLCJyaWQiOiJnbG9iYWxBZG1pbiIsInBpZCI6LTEwMCwic3ViIjoiTG9nUmh5dGhtQWRtaW4iLCJleHAiOjE2OTk2ODMwNzIsImRlaWQiOjEsImlhdCI6MTY2ODE0NzA3Mn0.j_XVNx-opX1wwg9c1RZJrOed30DpHC4QFmK8ZMhGIXARZ4nDbbe-HqPtWf7JQNWeAbK6JzF1JMmohNKMwtmxchHq-wHNsGgDz1jh74gj_Wiy-wRA-Lbjv1HNb1EQR-BQuSFDiCXrDAweLFDuNytoxRBlfKJVgY7sJDF3544OBAGSU-e8RsMpDitAOaT96Qc4oRC5meDHaKdesNDQfyQRdRE16OD983sEy3i7OU6k1dMShSwrJqVLQtR78jyJD2PUS7UkALv9OHwQGPxRgw40qlw4WqLFnIgApHWVJjaicZpFvly4D6VRNHJDjWVOBHw6ijvPQGdumMRCCLyLjE_0Cw'
+
+$DrilldownApiUrl = "https://xxxx:8501/lr-drilldown-cache-api/"
+$gToken = ''
 $Drilldown = Get-AlarmDrilldownResults -DrilldownApiUrl $DrilldownApiUrl -ApiKey $gToken -AlarmId $AlarmID
 
 #$priority = $Drilldown.DrillDownResults.Priority
