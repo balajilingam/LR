@@ -1,3 +1,213 @@
+# Requires -Version 3.0
+# Add Request to Service Desk
+#
+# This script is used to add request(s) to a service desk via its API
+#
+# The following steps are performed:
+#
+#============================================#
+# LogRhythm SmartResponse Plugin             #
+# Manage Service - SmartResponse             #
+# Balaji.chockalingam@tatacommunications.com #
+# V0.1  --  September, 2022                  #
+#============================================#
+
+
+
+[CmdletBinding()]
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$url,
+    [Parameter(Mandatory=$true)]
+    [string]$technicianKey,   
+    [Parameter(Mandatory=$true)]
+    [string]$AlarmID,
+    [Parameter(Mandatory=$true)]
+    [string]$AlarmName,
+    [Parameter(Mandatory=$true)]
+    [string]$AlarmDate,
+    [Parameter(Mandatory=$true)]
+    [string]$Impact_details,    
+	[string]$Classification,
+	[string]$LogSource,
+	[string]$Zone,
+	[string]$EntityOrigin,
+	[string]$EntityImpacted,
+	[string]$HostOrigin,
+	[string]$HostImpcated,
+	[string]$UserOrigin,
+	[string]$IPAddressOrigin,
+	[string]$IPAddressImpacted,	
+	[string]$OutputPath = 'L:\SRP_ITSM logs\'
+     
+)
+
+
+$ErrorActionPreference = "Stop"
+# Trap for an exception during the script
+Trap [Exception]
+{
+    if($PSItem.ToString() -eq "ExecutionFailure")
+	{
+		exit 1
+	}
+	elseif($PSItem.ToString() -eq "ExecutionSuccess")
+	{
+		exit
+	}
+	else
+	{
+		Write-Error $("Trapped: $_")
+		Write-Output "Aborting Operation."
+		exit
+	}
+}
+
+
+# Function - Write a log to the log file
+function Write-SRPCLog
+{
+	# Global $OutputPath
+	param( 
+		[string] [Parameter(Mandatory=$true)] $Level,
+		[switch] $Output = $False,
+		[string] [Parameter(Mandatory=$true)] $Message
+	)
+	
+    $Date = (Get-Date).ToString("yyyy-MM-dd")
+	$OutputFile = Join-Path $OutputPath "SRP-Iftas-$Date.log"
+	$Time = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
+	
+	$MessageEnhanced = ($Time + " [" + $Level + "] [Alarm: " + $AlarmId + "] " + $Message)
+	try {
+		#$MessageEnhanced | Out-File $OutputFile -Append
+        $MessageEnhanced >> $OutputFile
+	} catch { }
+	# This is something we want in Standard Out
+	if ($Output) 
+	{
+		Write-Host ("[SRP-LR-IFTAS] " + $Message)
+	} else {
+		Write-Debug $MessageEnhanced
+	}
+}
+
+#Function - Disabling SSL certificate error
+function Disable-SSLError
+{
+	
+    add-type @"
+        using System.Net;
+        using System.Security.Cryptography.X509Certificates;
+        public class TrustAllCertsPolicy : ICertificatePolicy {
+            public bool CheckValidationResult(
+                ServicePoint srvPoint, X509Certificate certificate,
+                WebRequest request, int certificateProblem) {
+                return true;
+            }
+        }
+"@
+    [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
+
+
+    # Forcing to use TLS1.2
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+}
+
+
+# Function to Validate Output path
+function Validate-OutputPath
+{
+if (!(Test-Path -Path $OutputPath))
+	{
+		New-Item -ItemType "directory" -Path $OutputPath -Force | Out-null
+	}
+
+}
+
+#Function to send MailMessage
+function Send-MailNotification
+{
+	param(
+		[string] [Parameter(Mandatory=$true)] $body
+	)
+	Send-MailMessage -From 'noreply-logrhythmnotifications@iftas.in' -To 'CyberSecurity.Team_g@iftas.in' -Subject 'Logrhythm Failure Notification' -Body $body -Priority High -DeliveryNotificationOption OnSuccess, OnFailure -SmtpServer '192.168.102.133'
+	Write-SRPCLog -Level "Info" -Output -Message  "Sent Mail on Error Notification. $body"
+}
+
+
+# Function to Get Alarm Drilldown Data
+function Get-AlarmDrilldownResults
+{
+
+	param( 
+		[string] [Parameter(Mandatory=$true)] $DrilldownApiUrl,
+		[string] [Parameter(Mandatory=$true)] $ApiKey,
+		[string] [Parameter(Mandatory=$true)] $AlarmId,
+		[int] $RetryCount = 0,
+		[int] $MaxRetries = 5,
+		[int] $RetryIntervalSeconds = 60
+	)	
+	
+	$Headers = @{
+		"Authorization" = ("Bearer " + $ApiKey); 
+        "Content-type" = "application/json"
+	}
+
+
+	try {
+		$AlarmIdInt = [Convert]::ToInt64($AlarmId)
+	} catch { 
+		$Message = "Failed to convert '$AlarmId' to an integer. The alarm was not added to the Case"
+		Write-SRPCLog -Level "Error" -Output -Message $Message
+		return $false
+	}
+	
+	#$ApiUrl_DD = [io.path]::combine($DrilldownApiUrl,"drilldown", $AlarmIdInt)
+    $ApiUrl_DD = $DrilldownApiUrl + "/drilldown/" + $AlarmIdInt 
+	$Response = $null
+	
+	try 
+	{
+		# API Call to get the drilldown results
+        Disable-SSLError
+		$Response = Invoke-RestMethod -method GET -uri $ApiUrl_DD -headers $Headers -UseBasicParsing 
+	}
+	catch 
+	{
+		# API call failed
+		try {
+			$reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+			$reader.BaseStream.Position = 0
+			$reader.DiscardBufferedData()
+			$responseBody = $reader.ReadToEnd()
+		
+			$ApiError = " (URL: $ApiUrl_DD, status code " + $_.Exception.Response.StatusCode.value__ + ', description: ' + $_.Exception.Response.StatusDescription + ', body: ' + $responseBody + ')'
+		} catch {
+			$ApiError = " (URL: $ApiUrl_DD, error unknown)"
+		}
+				
+		$Message = "Failed to call Drilldown to get results for Alarm ID $AlarmIdInt " + $ApiError
+		Write-SRPCLog -Level "Warning" -Message $Message
+		
+		# TODO Retry?
+		return $null
+	}
+	
+	if ($Response.Data -eq $null -and $RetryCount -lt $MaxRetries)
+	{
+		$RetryCount += 1
+		# Alarm drilldown may still be pending
+		Write-SRPCLog -Level "Info" -Message ("No results found for alarm $AlarmIdInt. Attempt $RetryCount of $MaxRetries, retrying in $RetryIntervalSeconds seconds")
+		sleep -s $RetryIntervalSeconds
+		return Get-AlarmDrilldownResults -DrilldownApiUrl $DrilldownApiUrl -ApiKey $ApiKey -AlarmId $AlarmId -RetryCount $RetryCount -MaxRetries $MaxRetries -RetryIntervalSeconds $RetryIntervalSeconds
+	} else {
+		return $Response.Data
+	}
+}
+
+#Function to get summary
 function Get-SummaryFieldName
 {
 	param(
@@ -12,33 +222,229 @@ function Get-SummaryFieldName
 		return $Mapping[$Field]
 	} else {
 		return "Unknown Field"
-		
-ServiceDesk API URL : servicedesk.iftas.in
-
-Tech Name(Usrename) : ngsocsupport
-Teck Key :8F7ADDC3-079D-4DD7-B46E-71D4DE5C7A3A
-p: Soc$upp0rt@321
-
-
 	}
 }
 
-function Get-UTCEpoch{
+# Gets the Description from Drilldown results
+function Get-Description
+{
+    param(
+        [psobject] [Parameter(Mandatory=$true)] $Drilldown,
+        [string] [Parameter(Mandatory=$true)] $AlarmDate
+        
+    )
+    if ($Drilldown -eq $null)
+    {
+	    Write-Error "No drilldown summary was available for $AlarmId"
+	    return $null
+    }
+
+    # We're going to build a the Alarm Summary from the Drilldown API Result
+    $Output = @()
+
+    #$SourceTimeZone = [TimeZoneInfo]::FindSystemTimeZoneById("UTC")
+    #$DestinationTimeZone = [TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
+    #$ConvertedTime = [TimeZoneInfo]::ConvertTime($Drilldown.DrillDownResults.NormalMessageDate, $SourceTimeZone, $DestinationTimeZone).ToString('yyyy-MM-ddTHH:mm:ss')
+
+    $Output += "<table border='1'> <tbody><tr><th style='text-align:center;color:white;background-color:#486AAE;padding: 2px' colspan='2'>Event Information </th><tr><td><b>AlarmID</b></td><td>"+ $Drilldown.DrillDownResults.AlarmID + "</td></tr> <tr><td><b>Alarm Date:</b></td><td>"+$AlarmDate +"</td></tr>"
+
+    $Output += "<tr><td style='text-align:center' colspan='2'><b>Alarm Summary</b></td></tr>"
+
+    # Create a new section for each Rule Block
+    foreach ($RuleBlock in $Drilldown.DrilldownResults.RuleBlocks) {
+	    $Output += ("<tr><td style='text-align:center' colspan='2'><b>Rule block "+ $RuleBlock.RuleBlockId+"</b></td></tr>") 
+	    foreach ($Summary in $RuleBlock.DDSummaries) {
+		    # Get the field name from the "PIF" ID (e.g. 24 = IP Address (Origin))
+		    # Note: you'll need to the Get-SummaryFieldName function from the Appendix
+		    $Field = Get-SummaryFieldName -Field $Summary.PIFType
+		    $Json = $Summary.DrilldownSummaryLogs | ConvertFrom-Json
+		    if ($Json.length -eq 1) 
+		    {
+			    # If there is only one value, no need for a new line after the label
+			    # e.g. "IP Address (Origin): 123.156.189"
+			
+			    if ($Json[0].value -eq 1)
+			    {
+				    $Freq = ""
+			    } else {
+				    # Only append the frequency if it's greater than 1
+				    $Freq = " (" + [math]::round($Json[0].value,0) + " logs)"
+                
+			    }			
+			    $Output += ("<tr><td><b>"+$Field + "</b></td><td>" + $Json.field + $Freq+"</td></tr>")
+            
+		    } elseif ($Json.length -gt 1)
+		    {
+			    # If there are multiple values associated with the field, make a new line for each
+			    # IP Address (Origin)
+			    #		123.156.189	(7)
+			    # 		123.156.188 (3)
+			    $Output += ("<tr><td rowspan="+($Json.length+1)+"><b>"+$Field +"</b></td>")
+
+			    foreach ($row in $Json)
+			    {
+				    $Output += "<tr><td>"+$row.field
+				    if ($row.value -ne 1)
+				    {
+					    # Only append the frequency if it's greater than 1
+					    $Output += " (" + [math]::round($row.value,0) + " logs)  </td></tr>"
+				    }
+				    $Output += "</td></tr>"
+			    }
+			    $Output += "</tr>"
+		    }
+
+	    }
+	    # Add the Rule Block information to the output buffer
+	    $Output += "</tbody></table>"
+		
+    }
+
+    # Combine the notes from each Rule Block
+    return $Output
+}
+
+#######################################################################
+# Ensure all necessary paths are created
+
+Write-SRPCLog -Level "Info" -Message ("Beginning SRP-Iftas for AlarmID: $AlarmId :: '$AlarmRuleName' & Alarm Date :: $AlarmDate" )
+
+$Status = "Open"
 
 
-	$NormalMessageDate= "2022-11-24T13:43:30"
+# Fetching Alarm Details 
+#https://10.160.4.4:8501/lr-drilldown-cache-api/drilldown/237958
+$DrilldownApiUrl = "https://172.38.1.20:8501/lr-drilldown-cache-api/"
+$gToken = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOi0xMDAsImp0aSI6IjliYjY0NTM1LWVjMzctNDhkYi05NTJhLWE0NDVlNTZmMTNhYiIsImNpZCI6IjcyNjkzRTI4LTc3M0MtNEYyMy1BRjExLTY4NDNBOTNFNUVCNSIsImlzcyI6ImxyLWF1dGgiLCJyaWQiOiJnbG9iYWxBZG1pbiIsInBpZCI6LTEwMCwic3ViIjoiTG9nUmh5dGhtQWRtaW4iLCJleHAiOjE2OTk2ODMwNzIsImRlaWQiOjEsImlhdCI6MTY2ODE0NzA3Mn0.j_XVNx-opX1wwg9c1RZJrOed30DpHC4QFmK8ZMhGIXARZ4nDbbe-HqPtWf7JQNWeAbK6JzF1JMmohNKMwtmxchHq-wHNsGgDz1jh74gj_Wiy-wRA-Lbjv1HNb1EQR-BQuSFDiCXrDAweLFDuNytoxRBlfKJVgY7sJDF3544OBAGSU-e8RsMpDitAOaT96Qc4oRC5meDHaKdesNDQfyQRdRE16OD983sEy3i7OU6k1dMShSwrJqVLQtR78jyJD2PUS7UkALv9OHwQGPxRgw40qlw4WqLFnIgApHWVJjaicZpFvly4D6VRNHJDjWVOBHw6ijvPQGdumMRCCLyLjE_0Cw'
+$Drilldown = Get-AlarmDrilldownResults -DrilldownApiUrl $DrilldownApiUrl -ApiKey $gToken -AlarmId $AlarmID
+
+#$priority = $Drilldown.DrillDownResults.Priority
+#$prty = '3 - Medium'
+#if ( $priority -gt 0  -and $priority -le 40) { $prty = '4 - Low' }
+#elseif ( $priority -gt 40  -and $priority -le 60) { $prty = '3 - Medium'}
+#elseif ( $priority -gt 60  -and $priority -le 80 ) { $prty = "2 - High"}
+#elseif ( $priority -gt 80 ) { $prty = '1 Critical'}
+if ($Drilldown -ne $null)
+{
+    if ($Drilldown.DrillDownResults.AIERuleName.Contains(":"))
+    {
+        $UseCaseName = $Drilldown.DrillDownResults.AIERuleName.split(":")[1]
+    }else{
+        $UseCaseName = $Drilldown.DrillDownResults.AIERuleName
+    }
+    $description = Get-Description -Drilldown $Drilldown -AlarmDate $AlarmDate;
+      
+    $comment = "<html>We have observed an alert for the use-case&nbsp;<b>"+ $UseCaseName + "</b>&nbsp;and details of the alerts are as given below:<br><br>$description</html>"
+
+
+}else{
+ $comment = "<html>We have observed an alert for the use-case&nbsp;<b>"+ $AlarmName + "</b>&nbsp;and Alarm ID is <br><br>$AlarmID</html>"
+}
+
+#Cook Header
+$technician_Key = "@" + "{ "+ "'" + "authtoken" + "'"+" = "+ "'" +$technicianKey +"'" + "}"
+$technician_Key = Invoke-Expression $technician_Key
+#$AlarmDate = [int64](Get-Date -UFormat %s)
+#$AlarmString = [string] $AlarmDate
+
+
 	$SourceTimeZone = [TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
-	$DestinationTimeZone = [TimeZoneInfo]::FindSystemTimeZoneById("UTC")
-	$ConvertedTime = [TimeZoneInfo]::ConvertTime($NormalMessageDate, $SourceTimeZone, $DestinationTimeZone).ToString('yyyy-MM-ddTHH:mm:ss')
-	$Con1 = [TimeZoneInfo]::ConvertTime($NormalMessageDate, $SourceTimeZone, $DestinationTimeZone);
-
-
-	$UTCEpoch = [int64](Get-Date -Date $Con1 -UFormat %s )
-	$ISTEpoch = [int64](Get-Date -Date $NormalMessageDate -UFormat %s )
-
-
-
+	$DestinationTimeZone = [TimeZoneInfo]::FindSystemTimeZoneById("UTC")	
+	$ConvertedTime = [TimeZoneInfo]::ConvertTime($AlarmDate, $SourceTimeZone, $DestinationTimeZone);
+	$UTCEpoch = [int64](Get-Date -Date $ConvertedTime -UFormat %s )
+	#$ISTEpoch = [int64](Get-Date -Date $NormalMessageDate -UFormat %s )
 	$UC = $UTCEpoch*1000
-	$IC = $ISTEpoch*1000
+	#$IC = $ISTEpoch*1000
 
+
+
+$Subject = $AlarmID + " : "+ $AlarmName;
+$Description = $Subject
+	
+Write-SRPCLog -Level "Info" -Message (" Alarm date is $AlarmDate & Alarm Epoch  = $UC")
+#Cook Body
+
+$ip=@{
+  "request"= @{	
+	"requester"= @{
+		 "name"= "ngsocsupport"
+	};
+    "subject"= $Subject;
+	"description"= $comment;
+    "impact"= $Impact;
+	"impact_details"= $Impact_details;	
+	"status"= @{
+		 "name"= $Status;
+   };
+   "udf_fields"=@{
+		"udf_sline_6315"= $AlarmID;
+		"udf_date_6317"= @{
+			"value"= $UC
+		};
+		"udf_sline_6318"= $AlarmName;
+		"udf_sline_6319"= $Classification;
+		"udf_sline_6320"= $LogSource;
+		"udf_sline_6321"= $Zone;
+		"udf_sline_6322"= $EntityOrigin;
+		"udf_sline_6323"= $EntityImpacted;
+		"udf_sline_6324"= $HostOrigin;		
+		"udf_sline_6325"= $HostImpcated;		
+		"udf_sline_6326"= $UserOrigin;		
+		"udf_sline_6327"= $IPAddressOrigin;		
+		"udf_sline_6328"= $IPAddressImpacted;
+        "udf_sline_6601"= $LogSourceHost;
+        "udf_sline_6602"= $TcpUdpPortOrgin;
+        "udf_sline_6603"= $Protocol;
+        "udf_sline_6604"= $ProcessName;		
+   };
+   "service_category"= @{
+            "id"= "1204"
+   };
+   "template"= @{
+            "id"= "6602"
+   };
+  }
+ }
+
+try{
+		$input_data =  ConvertTo-Json -InputObject $ip -Depth 10	
+}
+	catch{
+		$message = $_.Exception.Message
+		
+			write-host "API call Unsuccessful."
+			write-error "Error: Unable to convert JSON object."
+			throw "ExecutionFailure"
+		}	
+$data = @{ 'input_data' = $input_data}
+
+#API invocation
+try 
+{
+	
+	Disable-SSLError
+	$response = Invoke-RestMethod -Uri $url -Method post -Body $data -Headers $technician_Key -ContentType "application/x-www-form-urlencoded"
+	$ticketId = $response.request.id;
+    Write-SRPCLog -Level "Info" -Message (" Ticket created at Portal Ticket# $ticketId")
+	Write-SRPCLog -Level "Info" -Message (" Completed the process with Response $response")
+}
+catch 
+{
+	# API call failed
+	try {
+		$reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+		$reader.BaseStream.Position = 0
+		$reader.DiscardBufferedData()
+		$responseBody = $reader.ReadToEnd()
+		$ApiError = " (URL: $CaseUrl_List, status code " + $_.Exception.Response.StatusCode.value__ + ', description: ' + $_.Exception.Response.StatusDescription + ', body: ' + $responseBody + ')'
+		
+	} catch {
+		$ApiError = " (URL: $CaseUrl_List, error unknown)"
+
+	}
+	$Message = "Failed to call Case API to create ticket at ManageEngine " + $ApiError
+	Write-SRPCLog -Level "Error" -Output -Message $Message	
+	$body = "Failed to create Ticket at Manage Engine Portal for AlarmID: $AlarmId"
+	Send-MailNotification -body $body
+	Exit 1
 }
